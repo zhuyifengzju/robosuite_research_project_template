@@ -212,9 +212,6 @@ if __name__ == "__main__":
     parser.add_argument("--num-demonstration", type=int, default=100, help="How much to scale rotation user inputs")
     parser.add_argument("--task-id", type=int, default=-1)
     
-    parser.add_argument("--use-discrete-actions", action="store_true")
-    parser.add_argument("--num-discrete-actions", type=int, default=11)
-    
     
     args = parser.parse_args()
 
