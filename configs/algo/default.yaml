@@ -1,0 +1,29 @@
+
+name: "BC"
+
+train:
+  lr: 0.0001
+  n_epochs: 2001
+  batch_size: 16
+  min_lr: 0.0001
+  num_workers: 0
+  warmstart: 10000
+  grad_clip: 10.0
+  use_rnn: true
+  rnn_horizon: 10
+
+obs:
+  modality:
+    rgb: ["agentview_rgb", "eye_in_hand_rgb"]
+    depth: []
+    low_dim: [
+      "gripper_states", "joint_states"
+    ]
+
+  img_shape: [128, 128]
+
+defaults:
+  - model: bc_transformer_policy.yaml
+  - loss_fn: nll_loss.yaml
+  - optimizer: adam_w
+  - scheduler: cosine_annealing_warmrestarts    

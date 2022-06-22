@@ -1,0 +1,6 @@
+domain_name: PLACEHOLDER
+
+dataset_name: PLACEHOLDER
+params:
+  data_file_name: HDF5_FILENAME
+  filter_key: null

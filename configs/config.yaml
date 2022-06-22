@@ -1,0 +1,23 @@
+# @package _global_
+
+# specify here default training configuration
+defaults:
+  - _self_
+  - algo: default
+  - data: tool_use
+  - experiment: null
+
+wandb_project: "example_project"
+
+folder: ./
+
+hdf5_cache_mode: "low_dim"
+
+hydra:
+  run:
+    dir: .
+
+seed: 7
+
+
+experiment_log: "No description added."

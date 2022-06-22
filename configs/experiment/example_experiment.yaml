@@ -1,0 +1,26 @@
+# @package _global_
+
+defaults:
+- override /data: tool_use
+
+
+hdf5_cache_mode: "low_dim"
+
+algo:
+  modality:
+    rgb: ["agentview_rgb", "eye_in_hand_rgb"]
+    depth: []
+    low_dim: ["gripper_states"]    
+  train:
+    batch_size: 16
+    n_epochs: 51
+    grad_clip: 10.
+    use_rnn: true
+    seq_len: 10
+  loss:
+    loss_kwargs:
+        reduction: "mean"
+
+data:
+  params:
+    filter_key: null

@@ -195,6 +195,67 @@ class ResnetConv(torch.nn.Module):
         out_w = int(math.ceil(input_shape[2] / scale))
         return (out_c, out_h, out_w)
 
+class StackedResnetConv(torch.nn.Module):
+    def __init__(self,
+                 pretrained=False,
+                 no_training=False,
+                 activation='relu',
+                 remove_layer_num=2,
+                 img_c=6,
+                 last_c=None,
+                 no_stride=False):
+
+        super().__init__()
+
+        assert(remove_layer_num <= 5)
+        # For training policy
+        layers = list(torchvision.models.resnet18(pretrained=pretrained).children())[:-remove_layer_num]
+        # If use eye_in_hand, we need to increase the channel size
+        conv0 = torch.nn.Conv2d(img_c, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
+        layers[0] = conv0
+
+        self.no_stride = no_stride
+        if self.no_stride:
+            layers[0].stride = (1, 1)
+            layers[3].stride = 1
+        self.resnet18_embeddings = torch.nn.Sequential(*layers)
+
+        if no_training:
+            for param in self.resnet18_embeddings.parameters():
+                param.requires_grad = False
+
+        self.remove_layer_num = remove_layer_num
+
+    def forward(self, x):
+        h = self.resnet18_embeddings(x)
+        return h
+
+    def output_shape(self, input_shapes):
+        assert(len(input_shapes[0]) == 3)
+        # Assuming only two camera views at this time
+        assert(len(input_shapes) == 2)
+        for i in range(len(input_shape)):
+            assert(input_shapes[0][i] == input_shapes[1][i])
+        input_shape = input_shape[0]
+        if self.remove_layer_num == 2:
+            out_c = 512
+            scale = 32.
+        elif self.remove_layer_num == 3:
+            out_c = 256
+            scale = 16.
+        elif self.remove_layer_num == 4:
+            out_c = 128
+            scale = 8.
+        elif self.remove_layer_num == 5:
+            out_c = 64
+            scale = 4.
+
+        if self.no_stride:
+            scale = scale / 4.
+        out_h = int(math.ceil(input_shape[1] / scale))
+        out_w = int(math.ceil(input_shape[2] / scale))
+        return (out_c, out_h, out_w)
+
 class Norm(nn.Module):
     def __init__(self, dim):
         super().__init__()
