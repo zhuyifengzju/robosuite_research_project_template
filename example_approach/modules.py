@@ -107,6 +107,36 @@ class ShallowConv(torch.nn.Module):
         out_w = int(math.floor(input_shape[2] / 2.))
         return [self._output_channels, out_h, out_w]
 
+class R3MConv(torch.nn.Module):
+    def __init__(self, 
+                 resnet_type="resnet18",
+                 finetune=False):
+        from r3m import load_r3m
+        self.r3m = load_r3m(resnet_type)
+        self.r3m.eval()
+        self.finetune = finetune
+        self.resnet_type = resnet_type
+    
+    def forward(self, x):
+        h = x * 255.0
+        if self.finetune:
+            with torch.no_grad():
+                embedding = self.r3m(h)
+        else:
+            embedding = self.r3m(h)
+        return embedding
+    def output_shape(self, input_shape):
+        assert(len(input_shape) == 3)
+        if self.resnet_type == "resnet18":
+            out_c = 512
+        elif self.resnet_type == "resnet34":
+            out_c = 512
+        elif self.resnet_type == "resnet50":
+            out_c = 2048
+        else:
+            raise NotImplementedError
+        
+
 class ResnetConv(torch.nn.Module):
     def __init__(self,
                  pretrained=False,
@@ -907,3 +937,297 @@ class CatSeqGroupModalities(torch.nn.Module):
         if self.learnable_position:
             dim += self.learnable_position
         return (dim, input_shape[-1])
+
+
+class ActionTokenGroupModalities(torch.nn.Module):
+    def __init__(self,
+                 use_eye_in_hand=False,
+                 use_joint=False,
+                 use_gripper=False,
+                 use_gripper_history=False,
+                 use_ee=False,
+                 embedding_size=32,
+                 joint_states_dim=7,
+                 gripper_states_dim=2,
+                 gripper_history_dim=10,
+                 squash=False,
+                 zero_action_token=True,                 
+                 *args,
+                 **kwargs):
+        super().__init__()
+        self.use_eye_in_hand = use_eye_in_hand
+        self.nets = nn.ModuleDict()
+        self.use_joint = use_joint
+        self.use_gripper = use_gripper
+        self.use_gripper_history = use_gripper_history
+        self.use_ee = use_ee
+
+        self.embedding_size = embedding_size
+
+        if zero_action_token:
+            action_token = nn.Parameter(torch.zeros(embedding_size))
+        else:
+            action_token = nn.Parameter(torch.randn(embedding_size))
+        self.register_parameter("action_token", action_token)
+        if "eye_in_hand" not in kwargs:
+            kwargs["eye_in_hand"] = {}        
+        if self.use_eye_in_hand:
+            self.nets["eye_in_hand_rgb"] = EyeInHandKeypointNet(visual_feature_dimension=embedding_size, **kwargs["eye_in_hand"])
+        if self.use_joint:
+            self.nets["joint_states"] = ProprioProjection(input_shape=(joint_states_dim,), out_dim=embedding_size, squash=squash)
+
+        if self.use_gripper:
+            self.nets["gripper_states"] = ProprioProjection(input_shape=(gripper_states_dim,), out_dim=embedding_size, squash=squash)
+
+        if self.use_gripper_history:
+            self.nets["gripper_history"] = ProprioProjection(input_shape=(gripper_history_dim, ), out_dim=embedding_size, squash=squash)
+        if self.use_ee:
+            self.nets["ee_states"] = ProprioProjection(input_shape=(3, ), out_dim=embedding_size, squash=squash)
+
+        self.num_modalities = int(self.use_eye_in_hand) + int(self.use_joint) + int(self.use_gripper) + int(self.use_ee) + int(self.use_gripper_history)
+
+        
+    def forward(self, spatial_context_input_tensor, obs_dict):
+        batch_size = spatial_context_input_tensor.shape[0]
+        self.tensor_list = [self.action_token.unsqueeze(0).expand(batch_size, -1).unsqueeze(1),
+                            spatial_context_input_tensor.unsqueeze(1)]
+        if self.num_modalities == 0:
+            return torch.cat(self.tensor_list, dim=1)
+
+        batch_size = spatial_context_input_tensor.shape[0]
+        for obs_key, net in self.nets.items():
+            out = net(obs_dict[obs_key])
+            self.tensor_list.append(out.unsqueeze(1))
+        return torch.cat(self.tensor_list, dim=1)
+
+    def output_shape(self, input_shape, shape_meta):
+        dim = 2
+        for obs_key in self.nets.keys():
+            dim += 1
+        return (dim, input_shape[-1])
+
+
+class ImgColorJitterAug(torch.nn.Module):
+    """
+    Conduct color jittering augmentation outside of proposal boxes
+    """
+    def __init__(
+            self,
+            input_shape,
+            brightness=0.3,
+            contrast=0.3,
+            saturation=0.3,
+            hue=0.3,
+            epsilon=0.05,
+    ):
+        super().__init__()
+        self.color_jitter = torchvision.transforms.ColorJitter(brightness=brightness, 
+                                                               contrast=contrast, 
+                                                               saturation=saturation, 
+                                                               hue=hue)
+        self.epsilon = epsilon
+
+    def forward(self, x):
+        if self.training and np.random.rand() > self.epsilon:
+            out = self.color_jitter(x)
+        else:
+            out = x
+        return out
+
+    def output_shape(self, input_shape):
+        return input_shape
+
+class ImgColorJitterGroupAug(torch.nn.Module):
+    """
+    Conduct color jittering augmentation outside of proposal boxes
+    """
+    def __init__(
+            self,
+            input_shape,
+            brightness=0.3,
+            contrast=0.3,
+            saturation=0.3,
+            hue=0.3,
+            epsilon=0.05,
+    ):
+        super().__init__()
+        self.color_jitter = torchvision.transforms.ColorJitter(brightness=brightness, 
+                                                               contrast=contrast, 
+                                                               saturation=saturation, 
+                                                               hue=hue)
+        self.epsilon = epsilon
+
+    def forward(self, x):
+        raise NotImplementedError
+        if self.training and np.random.rand() > self.epsilon:
+            out = self.color_jitter(x)
+        else:
+            out = x
+        return out
+
+    def output_shape(self, input_shape):
+        return input_shape
+
+class DataAugGroup(torch.nn.Module):
+    """
+    Add augmentation to multiple inputs
+    """
+    def __init__(
+            self,
+            use_color_jitter=True,
+            use_random_erasing=False,
+            **aug_kwargs
+    ):
+        super().__init__()
+
+        transforms = []
+
+        self.use_color_jitter = use_color_jitter
+        self.use_random_erasing = use_random_erasing
+
+        if self.use_color_jitter:
+            color_jitter = torchvision.transforms.ColorJitter(**aug_kwargs["color_jitter"])
+            transforms.append(color_jitter)
+        if self.use_random_erasing:
+            random_erasing = torchvision.transforms.RandomErasing(**aug_kwargs["random_erasing"])
+            transforms.append(random_erasing)
+
+        self.transforms = torchvision.transforms.Compose(transforms)
+
+    def forward(self, x_groups):
+        split_channels = []
+        for i in range(len(x_groups)):
+            split_channels.append(x_groups[i].shape[0])
+        if self.training:
+            x = torch.cat(x_groups, dim=0)
+            out = self.transforms(x)
+            out = torch.split(out, split_channels, dim=0)
+            return out
+        else:
+            out = x_groups
+        return out
+
+
+class DataAugGroup(torch.nn.Module):
+    """
+    Add augmentation to multiple inputs
+    """
+    def __init__(
+            self,
+            use_color_jitter=True,
+            use_random_erasing=False,
+            **aug_kwargs
+    ):
+        super().__init__()
+
+        transforms = []
+
+        self.use_color_jitter = use_color_jitter
+        self.use_random_erasing = use_random_erasing
+
+        if self.use_color_jitter:
+            color_jitter = torchvision.transforms.ColorJitter(**aug_kwargs["color_jitter"])
+            transforms.append(color_jitter)
+        if self.use_random_erasing:
+            random_erasing = torchvision.transforms.RandomErasing(**aug_kwargs["random_erasing"])
+            transforms.append(random_erasing)
+
+        self.transforms = torchvision.transforms.Compose(transforms)
+
+    def forward(self, x_groups):
+        split_channels = []
+        for i in range(len(x_groups)):
+            split_channels.append(x_groups[i].shape[0])
+        if self.training:
+            x = torch.cat(x_groups, dim=0)
+            out = self.transforms(x)
+            out = torch.split(out, split_channels, dim=0)
+            return out
+        else:
+            out = x_groups
+        return out
+
+
+class RNNBackbone(nn.Module):
+    def __init__(self,
+                 input_dim=64,
+                 rnn_hidden_dim=1000,
+                 rnn_num_layers=2,
+                 rnn_type="LSTM",
+                 per_step_net=None,
+                 rnn_kwargs={"bidirectional": False},
+                 *args,
+                 **kwargs):
+        super().__init__()
+        self.per_step_net = eval(per_step_net.network)(**per_step_net.network_kwargs)
+        self.rnn_model = Robomimic_RNN_Base(
+            input_dim=64,
+            rnn_hidden_dim=1000,
+            rnn_num_layers=2,
+            rnn_type="LSTM",
+            per_step_net=self.per_step_net,
+            rnn_kwargs=rnn_kwargs
+        )
+
+    def forward(self, x, *args, **kwargs):
+        return self.rnn_model(x, *args, **kwargs)
+
+    def get_rnn_init_state(self, *args, **kwargs):
+        return self.rnn_model.get_rnn_init_state(*args, **kwargs)
+
+    def forward_step(self, *args, **kwargs):
+        return self.rnn_model.forward_step(*args, **kwargs)
+
+
+class GMMPolicyOutputHead(robomimic.models.base_nets.Module):
+    """GMM policy output head without any nonlinear MLP layers."""
+    def __init__(self,
+                 input_dim,
+                 output_dim,
+                 num_modes=5, 
+                 min_std=0.0001,
+                 std_activation="softplus", 
+                 low_noise_eval=False, 
+                 use_tanh=False
+    ):
+        super().__init__()
+
+        self.num_modes = num_modes
+        self.output_dim = output_dim
+        self.min_std = min_std
+
+        self.low_noise_eval = low_noise_eval
+        self.std_activation = std_activation
+        self.use_tanh = use_tanh
+        
+        out_dim = self.num_modes * output_dim
+
+        self.mean_layer = nn.Linear(input_dim, out_dim)
+        self.scale_layer = nn.Linear(input_dim, out_dim)
+        self.logits_layer = nn.Linear(input_dim, self.num_modes)
+        self.activations = {
+            "softplus": F.softplus,
+            "exp": torch.exp,
+        }
+
+        
+    def forward(self, x):
+        means = self.mean_layer(x).view(-1, self.num_modes, self.output_dim)
+        scales = self.scale_layer(x).view(-1, self.num_modes, self.output_dim)
+        logits = self.logits_layer(x)
+        
+        means = torch.tanh(means)
+        if self.low_noise_eval and (not self.training):
+            # low-noise for all Gaussian dists
+            scales = torch.ones_like(means) * 1e-4
+        else:
+            # post-process the scale accordingly
+            scales = self.activations[self.std_activation](scales) + self.min_std
+
+        self.means = means
+        self.scales = scales
+        self.logits = logits
+
+        return {"means": self.means,
+                "scales": self.scales,
+                "logits": self.logits}
