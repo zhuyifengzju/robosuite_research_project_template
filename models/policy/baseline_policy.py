@@ -18,6 +18,9 @@ class BCGMMPolicy(BasePolicy):
         self.img_aug = eval(policy_cfg.img_aug.network)(**policy_cfg.img_aug.network_kwargs)
         input_shape = self.img_aug.output_shape(input_shape)
 
+        
+
+
         policy_cfg.encoder.network_kwargs["input_shape"] = input_shape        
         self.encoder = eval(policy_cfg.encoder.network)(**policy_cfg.encoder.network_kwargs)
         print(input_shape)
@@ -26,25 +29,16 @@ class BCGMMPolicy(BasePolicy):
         print(input_shape)
 
         policy_cfg.decoder.network_kwargs.input_shape = input_shape
+        policy_cfg.decoder.network_kwargs["group"] = policy_cfg.group
+        policy_cfg.decoder.network_kwargs["policy_output_head"] = policy_cfg.policy_output_head
         self.decoder = eval(policy_cfg.decoder.network)(shape_meta, **policy_cfg.decoder.network_kwargs)
 
     def forward_fn(self, data):
-
-        #####################################################
-        ### augmentation on images
-        #####################################################        
         out = self.img_aug(data["obs"]["stacked_rgb"])
 
         out = self.data_aug(out)
         
-        #####################################################
-        ### Encoder
-        #####################################################                
         self.encoder_out = self.encoder(out)
-
-        #####################################################
-        ### Calculate action output
-        #####################################################                 
 
         self.decoder_out = self.decoder(self.encoder_out, data["obs"])
 
@@ -114,8 +108,8 @@ class BCTransformerPolicy(BasePolicy):
         self.spatial_projection = eval(policy_cfg.spatial_projection.network)(**policy_cfg.spatial_projection.network_kwargs)
 
 
-        self.grouping = eval(policy_cfg.grouping.network)(**policy_cfg.grouping.network_kwargs)
-        input_shape = self.grouping.output_shape(input_shape, shape_meta)
+        self.group = eval(policy_cfg.group.network)(**policy_cfg.group.network_kwargs)
+        input_shape = self.group.output_shape(input_shape, shape_meta)
 
         policy_cfg.temporal_position.network_kwargs.input_shape = input_shape
         self.temporal_position_encoding = eval(policy_cfg.temporal_position.network)(**policy_cfg.temporal_position.network_kwargs)
@@ -156,7 +150,7 @@ class BCTransformerPolicy(BasePolicy):
 
         # Add a spatial softma layer to get spatial_projection_out
         self.spatial_projection_out = self.spatial_projection(self.encoder_out)
-        self.position_embedding_out = self.grouping(self.spatial_projection_out, data["obs"])
+        self.position_embedding_out = self.group(self.spatial_projection_out, data["obs"])
         return self.position_embedding_out        
 
     def decode_fn(self, x, per_step=False):

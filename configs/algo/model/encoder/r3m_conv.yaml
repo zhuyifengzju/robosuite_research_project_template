@@ -1,0 +1,6 @@
+
+network: R3MConv
+
+network_kwargs:
+  resnet_type: resnet18
+  finetune: false

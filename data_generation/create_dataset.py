@@ -102,7 +102,6 @@ if __name__ == "__main__":
     demo_path = args.folder
     hdf5_path = os.path.join(demo_path, "demo.hdf5")
     f = h5py.File(hdf5_path, "r")
-    # env_name = "BlockStacking"
     env_name = f["data"].attrs["env"]
 
     env_args = f["data"].attrs["env_info"]
@@ -175,9 +174,6 @@ if __name__ == "__main__":
         model_xml = f["data/{}".format(ep)].attrs["model_file"]
         env.reset()
 
-        # if env_name == "PegInHoleEnv":
-        #     xml = postprocess_model_xml(model_xml, {"agentview": {"pos": "0.7 0 1.45", "quat": "0.653 0.271 0.271 0.653"}})
-        # elif env_name == "MediumPickPlace":
         model_xml = utils.postprocess_model_xml(model_xml, {})
         # model_xml = utils.postprocess_model_xml(model_xml, {"robot0_eye_in_hand": {"pos": "0.05 0.0 0.049999", "quat": "0.0 0.707108 0.707108 0.0"}})            
         # else:
@@ -186,8 +182,6 @@ if __name__ == "__main__":
         if not args.use_camera_obs:
             env.viewer.set_camera(0)
 
-        # load the flattened mujoco states
-        # states = f["data/{}/states".format(ep)].value
         states = f["data/{}/states".format(ep)][()]
         actions = np.array(f["data/{}/actions".format(ep)][()])
 
@@ -218,7 +212,6 @@ if __name__ == "__main__":
                          2: [],
                          3: [],
                          4: []}
-        # os.makedirs(f"{out_parent_dir}/ep_{i}", exist_ok=True)
 
         idx = 0
 
@@ -232,18 +225,24 @@ if __name__ == "__main__":
             object_states[name] = []
         
         for j, action in enumerate(actions):
+            
+            if args.use_actions:
+                obs, reward, done, info = env.step(action)
 
-            obs, reward, done, info = env.step(action)
+                if j < num_actions - 1:
+                    # ensure that the actions deterministically lead to the same recorded states
+                    state_playback = env.sim.get_state().flatten()
+                    # assert(np.all(np.equal(states[j + 1], state_playback)))
+                    err = np.linalg.norm(states[j + 1] - state_playback)
 
-            if j < num_actions - 1:
-                # ensure that the actions deterministically lead to the same recorded states
-                state_playback = env.sim.get_state().flatten()
-                # assert(np.all(np.equal(states[j + 1], state_playback)))
-                err = np.linalg.norm(states[j + 1] - state_playback)
-
-                if err > 0.01:
-                    print(f"[warning] playback diverged by {err:.2f} for ep {ep} at step {j}")
-
+                    if err > 0.01:
+                        print(f"[warning] playback diverged by {err:.2f} for ep {ep} at step {j}")
+            else:
+                env.sim.reset()
+                env.sim.set_state_from_flattened(states[j])
+                env.sim.forward()
+                env._update_observables(force=True)
+                obs = env._get_observations()
             # Skip recording because the force sensor is not stable in
             # the beginning
             if j < cap_index:
@@ -260,18 +259,15 @@ if __name__ == "__main__":
 
                 joint_states.append(obs["robot0_joint_pos"])
 
-                if env_kwargs["controller_configs"]["type"] == "OSC_POSITION":
-                    ee_states.append(np.hstack((obs["robot0_eef_pos"])))
-                else:
-                    ee_states.append(np.hstack((obs["robot0_eef_pos"], T.quat2axisangle(obs["robot0_eef_quat"]))))
+                ee_states.append(np.hstack((obs["robot0_eef_pos"], T.quat2axisangle(obs["robot0_eef_quat"]))))
 
             robot_states.append(env.get_robot_state_vector(obs))
 
             if args.use_camera_obs:
 
                 if args.use_depth:
-                    agentview_depths.append(obs["agentview_depth"])
-                    eye_in_hand_depths.append(obs["robot0_eye_in_hand_depth"])
+                    agentview_depths.append(utils.get_normalized_depth(env.sim, obs["agentview_depth"]))
+                    eye_in_hand_depths.append(utils.get_normalized_depth(env.sim, obs["robot0_eye_in_hand_depth"]))
 
                 if args.use_seg:
                     seg_img = obs["agentview_segmentation_instance"]
@@ -284,24 +280,9 @@ if __name__ == "__main__":
                         mask_img = (seg_img == idx).astype(np.uint8).squeeze()
                         import cv2
                         mask_img = cv2.medianBlur(mask_img, 5)
-                        agentview_seg[idx].append(np.expand_dims(mask_img, axis=-1))
-                        # agentview_seg[idx].append(obs["agentview_image"] * (seg_img == idx).astype(np.uint8))
-
-                            
+                        agentview_seg[idx].append(np.expand_dims(mask_img, axis=-1))      
                 agentview_images.append(obs["agentview_image"])
                 eye_in_hand_images.append(obs["robot0_eye_in_hand_image"])
-
-                # eye_in_hand_image = cv2.cvtColor(obs["robot0_eye_in_hand_image"], cv2.COLOR_BGR2RGB)
-                # cv2.imwrite(eye_in_hand_image_name, eye_in_hand_image)
-                # agentview_image = cv2.cvtColor(obs["agentview_image"], cv2.COLOR_BGR2RGB)
-                # cv2.imwrite(agentview_image_name, agentview_image)
-
-                # assert(np.all(obs["agentview_image"] == np.array(Image.open(agentview_image_name))))
-
-                # agentview_images.append(obs["agentview_image"].transpose(2, 0, 1))
-                # eye_in_hand_images.append(obs["robot0_eye_in_hand_image"].transpose(2, 0, 1))
-
-
             else:
                 env.render()
 
@@ -322,6 +303,8 @@ if __name__ == "__main__":
             obs_grp.create_dataset("gripper_states", data=np.stack(gripper_states, axis=0))
             obs_grp.create_dataset("joint_states", data=np.stack(joint_states, axis=0))
             obs_grp.create_dataset("ee_states", data=np.stack(ee_states, axis=0))
+            obs_grp.create_dataset("ee_pos", data=np.stack(ee_states, axis=0)[:, :3])
+            obs_grp.create_dataset("ee_ori", data=np.stack(ee_states, axis=0)[:, 3:])
         obs_grp.create_dataset("agentview_rgb", data=np.stack(agentview_images, axis=0))
         obs_grp.create_dataset("eye_in_hand_rgb", data=np.stack(eye_in_hand_images, axis=0))
 

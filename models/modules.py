@@ -119,7 +119,7 @@ class R3MConv(torch.nn.Module):
     
     def forward(self, x):
         h = x * 255.0
-        if self.finetune:
+        if not self.finetune:
             with torch.no_grad():
                 embedding = self.r3m(h)
         else:
@@ -144,7 +144,6 @@ class ResnetConv(torch.nn.Module):
                  activation='relu',
                  remove_layer_num=2,
                  img_c=3,
-                 last_c=None,
                  no_stride=False):
 
         super().__init__()
@@ -202,7 +201,6 @@ class StackedResnetConv(torch.nn.Module):
                  activation='relu',
                  remove_layer_num=2,
                  img_c=6,
-                 last_c=None,
                  no_stride=False):
 
         super().__init__()
@@ -456,35 +454,6 @@ class TransformerDecoder(nn.Module):
                 self.attention_output[layer_idx] = att.att_weights
             x = x + self.drop_path(ff(ff_norm(x)))
         return x
-
-class RoIAlignWrapper(nn.Module):
-    def __init__(self,
-                 input_shape,
-                 output_size,
-                 spatial_scale,
-                 sampling_ratio,
-                 aligned=True,
-                 bbox_size=4):
-        super().__init__()
-        assert(aligned==True)
-        self.output_size = output_size
-        self.bbox_size = bbox_size
-        self.roi_align = torchvision.ops.RoIAlign(output_size=output_size,
-                                                  spatial_scale=spatial_scale,
-                                                  sampling_ratio=sampling_ratio,
-                                                  aligned=aligned)
-
-    def forward(self, x, bbox_list):
-        batch_size, channel_size, h, w = x.shape
-        bbox_size = bbox_list[0].shape[0]
-        out = self.roi_align(x, bbox_list)
-        out = out.reshape(batch_size, bbox_size, channel_size, *self.output_size)
-        return out
-
-    def output_shape(self, input_shape):
-        """Return a batch of input sequences"""
-        return (input_shape[0], self.output_size[0], self.output_size[1])
-
 
 class IdentityAug(nn.Module):
     def __init__(self,
@@ -874,7 +843,50 @@ class GMMPolicyMLPLayer(nn.Module):
                     x = self.encoder(x)
                     x = self.spatial_softmax(x)
                     x = self.fc(x)            
-            return x    
+            return x   
+ 
+class CatProprioGroupModalities(torch.nn.Module):
+    def __init__(self,
+                 use_joint=False,
+                 use_gripper=False,
+                 use_gripper_history=False,
+                 use_ee=False,
+                 *args,
+                 **kwargs):
+        super().__init__()
+        self.use_joint = use_joint
+        self.use_gripper = use_gripper
+        self.use_gripper_history = use_gripper_history
+        self.use_ee = use_ee
+
+        self.num_modalities = int(self.use_eye_in_hand) + int(self.use_joint) + int(self.use_gripper) + int(self.use_ee) + int(self.use_gripper_history)
+
+    def forward(self, input_tensor, obs_dict):
+        if self.num_modalities == 0:
+            return input_tensor
+
+        tensor_list = [input_tensor]
+        if self.use_joint:
+            tensor_list.append(obs_dict["joint_states"])
+        if self.use_gripper:
+            tensor_list.append(obs_dict["gripper_states"])
+        if self.use_gripper_history:
+            tensor_list.append(obs_dict["gripper_history"])
+        if self.use_ee:
+            tensor_list.append(obs_dict["ee_states"])   
+        return torch.cat(tensor_list, dim=-1)
+        
+    def output_shape(self, input_shape, shape_meta):
+        dim = input_shape[-1] * input_shape[0]
+        if self.use_joint:
+            dim += shape_meta["all_shapes"]["joint_states"][0]
+        if self.use_gripper:
+            dim += shape_meta["all_shapes"]["gripper_states"][0]
+        if self.use_gripper_history:
+            dim += shape_meta["all_shapes"]["gripper_history"][0]
+        if self.use_ee:
+            dim += shape_meta["all_shapes"]["ee_states"][0]
+        return (dim,)
 
 class CatGroupModalities(torch.nn.Module):
     def __init__(self,
@@ -1012,7 +1024,7 @@ class ActionTokenGroupModalities(torch.nn.Module):
                  gripper_states_dim=2,
                  gripper_history_dim=10,
                  squash=False,
-                 zero_action_token=True,                 
+                 zero_action_token=False,                 
                  *args,
                  **kwargs):
         super().__init__()
@@ -1030,10 +1042,6 @@ class ActionTokenGroupModalities(torch.nn.Module):
         else:
             action_token = nn.Parameter(torch.randn(embedding_size))
         self.register_parameter("action_token", action_token)
-        if "eye_in_hand" not in kwargs:
-            kwargs["eye_in_hand"] = {}        
-        if self.use_eye_in_hand:
-            self.nets["eye_in_hand_rgb"] = EyeInHandKeypointNet(visual_feature_dimension=embedding_size, **kwargs["eye_in_hand"])
         if self.use_joint:
             self.nets["joint_states"] = ProprioProjection(input_shape=(joint_states_dim,), out_dim=embedding_size, squash=squash)
 
@@ -1048,21 +1056,24 @@ class ActionTokenGroupModalities(torch.nn.Module):
         self.num_modalities = int(self.use_eye_in_hand) + int(self.use_joint) + int(self.use_gripper) + int(self.use_ee) + int(self.use_gripper_history)
 
         
-    def forward(self, spatial_context_input_tensor, obs_dict):
-        batch_size = spatial_context_input_tensor.shape[0]
-        self.tensor_list = [self.action_token.unsqueeze(0).expand(batch_size, -1).unsqueeze(1),
-                            spatial_context_input_tensor.unsqueeze(1)]
+    def forward(self, latent_vectors, obs_dict):
+        """
+            latent_vecotrs (list): A list of torch tensors that are latent visual vectors
+        """
+        batch_size = latent_vectors[0].shape[0]
+        self.tensor_list = [self.action_token.unsqueeze(0).expand(batch_size, -1).unsqueeze(1)] + [latent_vector.unsqueeze(1) for latent_vector in latent_vectors]
         if self.num_modalities == 0:
             return torch.cat(self.tensor_list, dim=1)
-
-        batch_size = spatial_context_input_tensor.shape[0]
         for obs_key, net in self.nets.items():
             out = net(obs_dict[obs_key])
             self.tensor_list.append(out.unsqueeze(1))
         return torch.cat(self.tensor_list, dim=1)
 
-    def output_shape(self, input_shape, shape_meta):
+    def output_shape(self, input_shapes, shape_meta):
         dim = 2
+        for i in range(len(input_shapes)-1):
+            for j in range(len(input_shapes[i])):
+                assert(input_shapes[i][j] == input_shapes[i+1][j]), "Make sure you pass in latent vectors in the same size"
         for obs_key in self.nets.keys():
             dim += 1
         return (dim, input_shape[-1])
@@ -1129,44 +1140,37 @@ class ImgColorJitterGroupAug(torch.nn.Module):
     def output_shape(self, input_shape):
         return input_shape
 
-class DataAugGroup(torch.nn.Module):
+class BatchWiseImgColorJitterAug(torch.nn.Module):
     """
-    Add augmentation to multiple inputs
+    Color jittering augmentation to individual batch. This is to create variation in training data to combat BatchNorm in convolution network.
     """
     def __init__(
             self,
-            use_color_jitter=True,
-            use_random_erasing=False,
-            **aug_kwargs
+            input_shape,
+            brightness=0.3,
+            contrast=0.3,
+            saturation=0.3,
+            hue=0.3,
+            epsilon=0.1,
     ):
         super().__init__()
+        self.color_jitter = torchvision.transforms.ColorJitter(brightness=brightness, 
+                                                               contrast=contrast, 
+                                                               saturation=saturation, 
+                                                               hue=hue)
+        self.epsilon = epsilon
 
-        transforms = []
+    def forward(self, x):
+        out = []
+        for x_i in torch.split(x, 1):
+            if self.training and np.random.rand() > self.epsilon:
+                out.append(self.color_jitter(x_i))
+            else:
+                out.append(x_i)
+        return torch.cat(out, dim=0)
 
-        self.use_color_jitter = use_color_jitter
-        self.use_random_erasing = use_random_erasing
-
-        if self.use_color_jitter:
-            color_jitter = torchvision.transforms.ColorJitter(**aug_kwargs["color_jitter"])
-            transforms.append(color_jitter)
-        if self.use_random_erasing:
-            random_erasing = torchvision.transforms.RandomErasing(**aug_kwargs["random_erasing"])
-            transforms.append(random_erasing)
-
-        self.transforms = torchvision.transforms.Compose(transforms)
-
-    def forward(self, x_groups):
-        split_channels = []
-        for i in range(len(x_groups)):
-            split_channels.append(x_groups[i].shape[0])
-        if self.training:
-            x = torch.cat(x_groups, dim=0)
-            out = self.transforms(x)
-            out = torch.split(out, split_channels, dim=0)
-            return out
-        else:
-            out = x_groups
-        return out
+    def output_shape(self, input_shape):
+        return input_shape
 
 
 class DataAugGroup(torch.nn.Module):
