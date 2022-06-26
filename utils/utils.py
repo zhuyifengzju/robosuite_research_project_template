@@ -8,6 +8,7 @@ import torch
 import random
 from models.modules import safe_cuda
 from pathlib import Path
+from robosuite.utils import camera_utils
 
 def postprocess_model_xml(xml_str, cameras_dict={}):
     """
@@ -113,11 +114,7 @@ def process_image_input(img_tensor):
 def reconstruct_image_output(img_array):
     # return (img_array + 1.) / 2. * 255.
     return img_array * 255.
-
-def process_bbox_tensor(bbox_tensor, img_w=128, img_h=128):
-    scaling_tensor = safe_cuda(torch.tensor([img_w, img_h, img_w, img_h]).unsqueeze(0).unsqueeze(0))
-    return bbox_tensor / scaling_tensor
-    
+   
 def update_env_kwargs(env_kwargs, **kwargs):
     for (k, v) in kwargs.items():
         env_kwargs[k] = v
@@ -140,3 +137,10 @@ def create_run_model(cfg, output_dir):
     # utils.save_run_cfg(output_dir, cfg)
 
     return output_dir
+
+def get_normalized_depth(env_sim, depth_img):
+    """Normalize the depth image to range from [0., 1.]"""
+    real_depth_img = camera_utils.get_real_depth_map(env_sim, depth_img)
+    min_depth = real_depth_img.min()
+    max_depth = real_depth_img.max()
+    return (real_depth_img - min_depth) / (max_depth - min_depth)

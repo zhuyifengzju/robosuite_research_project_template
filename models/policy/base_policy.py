@@ -18,3 +18,10 @@ class BasePolicy(torch.nn.Module):
     
     def reset(self):
         self.reset_at_start = True
+
+    def aug_fn(self, x):
+        """
+            Initialize augmentation function on the input. Return output shape of augmentation
+        """
+        return x
+        
