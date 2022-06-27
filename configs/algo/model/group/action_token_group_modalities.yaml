@@ -5,7 +5,7 @@ network_kwargs:
   use_gripper: true
   use_gripper_history: false
   use_ee_pos: false
-  use_ee_ori: false  
+  use_ee_ori: false
   embedding_size: 64
   ee_pos_dim: 3
   ee_ori_dim: 3

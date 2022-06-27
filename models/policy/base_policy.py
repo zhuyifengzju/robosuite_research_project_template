@@ -2,7 +2,7 @@
 import torch
 
 class BasePolicy(torch.nn.Module):
-    def __init__(self):
+    def __init__(self, *args, **kwargs):
         super().__init__()
         self.reset_at_start = False
 

@@ -23,7 +23,7 @@ obs:
   img_shape: [128, 128]
 
 defaults:
-  - model: bc_transformer_policy.yaml
+  - model: bc_transformer_policy_rgb.yaml
   - loss_fn: nll_loss.yaml
   - optimizer: adam_w
   - scheduler: cosine_annealing_warmrestarts    

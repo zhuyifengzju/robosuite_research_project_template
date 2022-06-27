@@ -30,7 +30,7 @@ class ActionTokenOutput(nn.Module):
     def __init__(self,
                  shape_meta,
                  input_shape,
-                 transformer_encoder,
+                 transformer,
                  policy_output_head,
                  group):
         super().__init__()
@@ -38,13 +38,12 @@ class ActionTokenOutput(nn.Module):
         input_shape  = self.group.output_shape(input_shape, shape_meta)
         input_dim = input_shape[-1]
         # seq_length = input_shape[0]
-        self.transformer_encoder = eval(transformer_encoder.network)(input_dim=input_dim,
-                                                                     **transformer_encoder.network_kwargs)
+        self.transformer = eval(transformer.network)(input_dim=input_dim,
+                                                     **transformer.network_kwargs)
         self.policy_output_head = eval(policy_output_head.network)(input_dim=input_dim,
                                                                    **policy_output_head.network_kwargs)
         
     def forward(self, x, obs_dict):
-        out = self.group(x, obs_dict)
         out = self.transformer_encoder(out)
         out = out[:, 0, ...]
         out = self.policy_output_head(out)
