@@ -1,0 +1,6 @@
+domain_name: tool-use
+
+dataset_name: ToolUseDomain_training_set
+params:
+  data_file_name: datasets/ToolUseDomain_training_set/demo.hdf5
+  filter_key: null

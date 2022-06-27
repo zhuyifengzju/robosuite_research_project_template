@@ -497,6 +497,41 @@ class TranslationAug(nn.Module):
     def output_shape(self, input_shape):
         return input_shape
 
+    
+class TranslationAugGroup(nn.Module):
+    """
+    Utilize the random crop from robomimic.
+    """
+    def __init__(
+            self,
+            input_shapes,
+            translation,
+    ):
+        super().__init__()
+
+        self.pad_translation = translation // 2
+        self.pad = nn.ReplicationPad2d(self.pad_translation)
+        self.channels = []
+        for input_shape in input_shapes:
+            self.channels.append(input_shape[0])
+        pad_output_shape = (sum(self.channels), input_shape[1] + translation, input_shape[2] + translation)
+        self.crop_randomizer = CropRandomizer(input_shape=pad_output_shape,
+                                              crop_height=input_shape[1],
+                                              crop_width=input_shape[2])
+
+    def forward(self, x_groups):
+        if self.training:
+            x = torch.cat(x_groups, dim=1)
+            out = self.pad(x)
+            out = self.crop_randomizer.forward_in(out)
+            out = torch.split(out, self.channels, dim=1)
+        else:
+            out = x_groups
+        return out
+
+    def output_shape(self, input_shape):
+        return input_shape
+
 class TemporalSinusoidalPositionEncoding(nn.Module):
     def __init__(self,
                  input_shape,
@@ -844,7 +879,7 @@ class GMMPolicyMLPLayer(nn.Module):
                     x = self.spatial_softmax(x)
                     x = self.fc(x)            
             return x   
- 
+
 class CatProprioGroupModalities(torch.nn.Module):
     def __init__(self,
                  use_joint=False,
@@ -1014,11 +1049,11 @@ class CatSeqGroupModalities(torch.nn.Module):
 
 class ActionTokenGroupModalities(torch.nn.Module):
     def __init__(self,
-                 use_eye_in_hand=False,
                  use_joint=False,
                  use_gripper=False,
                  use_gripper_history=False,
-                 use_ee=False,
+                 use_ee_pos=False,
+                 use_ee_ori=False,
                  embedding_size=32,
                  joint_states_dim=7,
                  gripper_states_dim=2,
@@ -1028,12 +1063,12 @@ class ActionTokenGroupModalities(torch.nn.Module):
                  *args,
                  **kwargs):
         super().__init__()
-        self.use_eye_in_hand = use_eye_in_hand
         self.nets = nn.ModuleDict()
         self.use_joint = use_joint
         self.use_gripper = use_gripper
         self.use_gripper_history = use_gripper_history
-        self.use_ee = use_ee
+        self.use_ee_pos = use_ee_pos
+        self.use_ee_ori = use_ee_ori
 
         self.embedding_size = embedding_size
 
@@ -1049,11 +1084,13 @@ class ActionTokenGroupModalities(torch.nn.Module):
             self.nets["gripper_states"] = ProprioProjection(input_shape=(gripper_states_dim,), out_dim=embedding_size, squash=squash)
 
         if self.use_gripper_history:
-            self.nets["gripper_history"] = ProprioProjection(input_shape=(gripper_history_dim, ), out_dim=embedding_size, squash=squash)
-        if self.use_ee:
-            self.nets["ee_states"] = ProprioProjection(input_shape=(3, ), out_dim=embedding_size, squash=squash)
+            self.nets["gripper_history"] = ProprioProjection(input_shape=(gripper_history_dim,), out_dim=embedding_size, squash=squash)
+        if self.use_ee_pos:
+            self.nets["ee_pos"] = ProprioProjection(input_shape=(3,), out_dim=embedding_size, squash=squash)
+        if self.use_ee_ori:
+            self.nets["ee_ori"] = ProprioProjection(input_shape=(3,), out_dim=embedding_size, squash=squash)
 
-        self.num_modalities = int(self.use_eye_in_hand) + int(self.use_joint) + int(self.use_gripper) + int(self.use_ee) + int(self.use_gripper_history)
+        self.num_modalities = int(self.use_joint) + int(self.use_gripper) + int(self.use_ee_pos) + int(self.use_ee_ori) + int(self.use_gripper_history)
 
         
     def forward(self, latent_vectors, obs_dict):
@@ -1069,14 +1106,13 @@ class ActionTokenGroupModalities(torch.nn.Module):
             self.tensor_list.append(out.unsqueeze(1))
         return torch.cat(self.tensor_list, dim=1)
 
-    def output_shape(self, input_shapes, shape_meta):
-        dim = 2
+    def output_shape(self, input_shapes):
+        dim = 1
         for i in range(len(input_shapes)-1):
-            for j in range(len(input_shapes[i])):
-                assert(input_shapes[i][j] == input_shapes[i+1][j]), "Make sure you pass in latent vectors in the same size"
+            dim += 1
         for obs_key in self.nets.keys():
             dim += 1
-        return (dim, input_shape[-1])
+        return (dim, input_shapes[0][-1])
 
 
 class ImgColorJitterAug(torch.nn.Module):
@@ -1179,25 +1215,11 @@ class DataAugGroup(torch.nn.Module):
     """
     def __init__(
             self,
-            use_color_jitter=True,
-            use_random_erasing=False,
-            **aug_kwargs
+            aug_list
     ):
         super().__init__()
 
-        transforms = []
-
-        self.use_color_jitter = use_color_jitter
-        self.use_random_erasing = use_random_erasing
-
-        if self.use_color_jitter:
-            color_jitter = torchvision.transforms.ColorJitter(**aug_kwargs["color_jitter"])
-            transforms.append(color_jitter)
-        if self.use_random_erasing:
-            random_erasing = torchvision.transforms.RandomErasing(**aug_kwargs["random_erasing"])
-            transforms.append(random_erasing)
-
-        self.transforms = torchvision.transforms.Compose(transforms)
+        self.aug_layer = torch.nn.Sequential(*aug_list)
 
     def forward(self, x_groups):
         split_channels = []
@@ -1205,7 +1227,7 @@ class DataAugGroup(torch.nn.Module):
             split_channels.append(x_groups[i].shape[0])
         if self.training:
             x = torch.cat(x_groups, dim=0)
-            out = self.transforms(x)
+            out = self.aug_layer(x)
             out = torch.split(out, split_channels, dim=0)
             return out
         else:

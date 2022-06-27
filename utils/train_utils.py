@@ -31,4 +31,4 @@ def get_dataset(dataset_path, obs_modality, seq_len=1, filter_key=None, hdf5_cac
                 hdf5_normalize_obs=None,
                 filter_by_attribute=filter_key,       # can optionally provide a filter key here
             )
-    return dataset
+    return dataset, shape_meta

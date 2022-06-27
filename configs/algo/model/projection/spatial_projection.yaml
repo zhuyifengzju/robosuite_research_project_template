@@ -1,4 +1,5 @@
 network: SpatialProjection
 
 network_kwargs:
+  input_shape: null
   out_dim: 64
