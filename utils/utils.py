@@ -10,6 +10,11 @@ from models.modules import safe_cuda
 from pathlib import Path
 from robosuite.utils import camera_utils
 
+def initialize_env():
+    os.environ["WANDB_API_KEY"] = "583f8684883901e7b048ee514f3551b4deeb2d76"
+    import robosuite.utils.macros as macros
+    macros.IMAGE_CONVENTION = "opencv"
+
 def postprocess_model_xml(xml_str, cameras_dict={}):
     """
     This function postprocesses the model.xml collected from a MuJoCo demonstration
@@ -120,7 +125,7 @@ def update_env_kwargs(env_kwargs, **kwargs):
         env_kwargs[k] = v
 
 
-def create_run_model(cfg, output_dir):
+def create_run_model(cfg, output_dir, additional_dir_list=None):
     experiment_id = 0
     for path in Path(output_dir).glob('run_*'):
         if not path.is_dir():
@@ -131,6 +136,18 @@ def create_run_model(cfg, output_dir):
                 experiment_id = folder_id
         except BaseException:
             pass
+    if additional_dir_list is not None:
+        for path in additional_dir_list:
+            if output_dir.replace("./", "") != str(Path(path).parents[0]).replace("./", ""):
+                # print("They are different", output_dir.replace("./", ""), " | ", str(Path(path)).replace("./", ""))
+                continue
+            try:
+                folder_id = int(str(path).split('run_')[-1])
+                if folder_id > experiment_id:
+                    experiment_id = folder_id
+            except BaseException:
+                pass
+
     experiment_id += 1
     output_dir += f"/run_{experiment_id:03d}"
     os.makedirs(output_dir, exist_ok=True)

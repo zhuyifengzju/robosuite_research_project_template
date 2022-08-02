@@ -3,10 +3,10 @@ name: "BC"
 
 train:
   lr: 0.0001
-  n_epochs: 2001
+  n_epochs: 51
   batch_size: 16
   min_lr: 0.0001
-  num_workers: 0
+  num_workers: 32
   warmstart: 10000
   grad_clip: 10.0
   use_rnn: true

@@ -8,7 +8,7 @@ defaults:
   - group: action_token_group_modalities.yaml
   - temporal_position: temporal_sin_position_encoding.yaml
   - transformer: transformer_decoder.yaml
-  - policy_output_head: gmm_policy_output_head
+  - policy_output_head: gmm_policy_mlp_layer
   
 
 

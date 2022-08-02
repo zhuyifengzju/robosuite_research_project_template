@@ -1,0 +1,15 @@
+# @package _global_
+
+# defaults:
+#   # - override /algo/model/aug@algo.model.color_aug: identity_aug
+
+
+algo:
+  train:
+    n_epochs: 51
+    grad_clip: 10.0
+  obs:
+    modality:
+      rgb: ["eye_in_hand_rgb"]
+flags:
+  use_logger: false

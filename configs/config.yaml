@@ -6,6 +6,7 @@ defaults:
   - algo: default
   - data: tool_use
   - experiment: null
+  - flags: default
 
 wandb_project: "example_project"
 
@@ -18,6 +19,5 @@ hydra:
     dir: .
 
 seed: 7
-
 
 experiment_log: "No description added."

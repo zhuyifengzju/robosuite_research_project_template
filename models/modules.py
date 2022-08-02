@@ -480,7 +480,7 @@ class TranslationAug(nn.Module):
         super().__init__()
 
         self.pad_translation = translation // 2
-        self.pad = nn.ReplicationPad2d(self.pad_translation)
+        # self.pad = nn.ReplicationPad2d(self.pad_translation)
         pad_output_shape = (input_shape[0], input_shape[1] + translation, input_shape[2] + translation)
         self.crop_randomizer = CropRandomizer(input_shape=pad_output_shape,
                                               crop_height=input_shape[1],
@@ -488,8 +488,12 @@ class TranslationAug(nn.Module):
 
     def forward(self, x):
         if self.training:
-            out = self.pad(x)
+            # out = self.pad(x)
+            batch_size, temporal_len, img_c, img_h, img_w = x.shape
+            x = x.reshape(batch_size, temporal_len * img_c, img_h, img_w)
+            out = torch.nn.functional.pad(x, pad=(self.pad_translation, ) * 4, mode="replicate")
             out = self.crop_randomizer.forward_in(out)
+            out = out.reshape(batch_size, temporal_len, img_c, img_h, img_w)
         else:
             out = x
         return out
@@ -1224,11 +1228,11 @@ class DataAugGroup(torch.nn.Module):
     def forward(self, x_groups):
         split_channels = []
         for i in range(len(x_groups)):
-            split_channels.append(x_groups[i].shape[0])
+            split_channels.append(x_groups[i].shape[1])
         if self.training:
-            x = torch.cat(x_groups, dim=0)
+            x = torch.cat(x_groups, dim=1)
             out = self.aug_layer(x)
-            out = torch.split(out, split_channels, dim=0)
+            out = torch.split(out, split_channels, dim=1)
             return out
         else:
             out = x_groups
